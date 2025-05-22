@@ -38,5 +38,7 @@ pip install pypdf
 
 # 可选：升级到最新版 pypdf（推荐）
 pip install --upgrade pypdf
+```
 
-Code with Qwen 3
+
+This program is generated using Qwen 
