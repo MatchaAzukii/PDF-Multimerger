@@ -8,11 +8,12 @@ from pypdf import PdfReader, PdfWriter, PageObject, Transformation
 
 
 class PDFMergerProcessor:
-    def __init__(self, input_folder, output_file, pages_per_sheet=4):
+    def __init__(self, input_folder, output_file, pages_per_sheet=4, padding=0.05):
         self.input_folder = input_folder
         self.output_file = output_file
         self.merger = PdfWriter()
-        self.pages_per_sheet = max(1, pages_per_sheet)  # 确保最小值为1
+        self.pages_per_sheet = max(1, pages_per_sheet)
+        self.padding = padding
 
     def _calculate_layout(self, n):
         """计算最优行列布局"""
@@ -21,9 +22,9 @@ class PDFMergerProcessor:
 
         cols = math.ceil(math.sqrt(n))  # 优先接近正方形
         rows = math.ceil(n / cols)
+
         return cols, rows
 
-    @staticmethod
     def _generate_positions(cols, rows, width, height):
         """
         生成页面布局坐标（从左上到右下）
@@ -38,7 +39,14 @@ class PDFMergerProcessor:
 
     def _get_scale_factor(self, cols, rows):
         """计算缩放比例"""
-        return (1.0 / cols, 1.0 / rows)
+        if isinstance(self.padding, (int, float)) and self.padding > 0:
+            padding_percent = self.padding
+            scale_x = (1.0 - 2 * padding_percent) / cols
+            scale_y = (1.0 - 2 * padding_percent) / rows
+        else:
+            scale_x = 1.0 / cols
+            scale_y = 1.0 / rows
+        return (scale_x, scale_y)
 
     def _extract_number_from_filename(self, filename):
         """自然排序提取文件名中的数字"""
@@ -86,18 +94,20 @@ class PDFMergerProcessor:
             # 计算布局参数
             cols, rows = self._calculate_layout(self.pages_per_sheet)
             scale_x, scale_y = self._get_scale_factor(cols, rows)
-            positions = self._generate_positions(cols, rows, width, height)
+            # positions = self._generate_positions(cols, rows, width, height)
 
-            # 分块处理
+            # Get padding value
+            padding_val = self.padding if isinstance(self.padding, (int, float)) else 0.0
+
+            # Build chunks
             with tempfile.TemporaryDirectory() as temp_dir:
                 chunk_size = self.pages_per_sheet
                 chunks = [
                     (file_path, start, min(start + chunk_size, total_pages),
-                     width, height, temp_dir, cols, rows, scale_x, scale_y)
+                     width, height, temp_dir, cols, rows, scale_x, scale_y, padding_val)
                     for start in range(0, total_pages, chunk_size)
                 ]
-
-                # 多进程处理
+                # Process in parallel
                 with Pool(processes=min(cpu_count(), len(chunks))) as pool:
                     results = pool.map(partial(self._process_chunk), chunks)
 
@@ -113,30 +123,35 @@ class PDFMergerProcessor:
 
     @staticmethod
     def _process_chunk(args):
-        """子进程处理单元（静态方法避免pickle问题）"""
         (file_path, start, end, width, height, temp_dir,
-         cols, rows, scale_x, scale_y) = args
-
+         cols, rows, scale_x, scale_y, padding_val) = args
+        assert len(args) == 11, f"Expected 11 arguments, got {len(args)}"
         try:
-            # 生成布局参数
-            positions = PDFMergerProcessor._generate_positions(cols, rows, width, height)
-
-            # 创建空白页面
+            reader = PdfReader(file_path)
             new_page = PageObject.create_blank_page(width=width, height=height)
 
-            # 读取源文件
-            reader = PdfReader(file_path)
+            cell_width = width / cols
+            cell_height = height / rows
+
+            positions = PDFMergerProcessor._generate_positions(cols=cols, rows=rows, width=width, height=height)
             chunk = reader.pages[start:end]
 
-            # 合并页面
             for idx, page in enumerate(chunk):
                 if idx >= len(positions):
                     break
                 tx, ty = positions[idx]
-                trans = Transformation().scale(scale_x, scale_y).translate(tx, ty)
+
+                # Apply padding offset within the cell
+                padx = cell_width * padding_val
+                pady = cell_height * padding_val
+                tx_total = tx + padx
+                ty_total = ty + pady
+
+                # Apply scaling and translation
+                trans = Transformation().scale(scale_x, scale_y).translate(tx_total, ty_total)
                 new_page.merge_transformed_page(page, trans)
 
-            # 保存临时文件
+            # Save temporary file
             temp_pdf_path = os.path.join(temp_dir, f"chunk_{start}_{end}.pdf")
             writer = PdfWriter()
             writer.add_page(new_page)
@@ -161,8 +176,9 @@ class PDFMergerProcessor:
 #           使用示例
 # ==============================
 if __name__ == "__main__":
-    input_folder = r"C:\Users\ROG\Desktop\2025 s2\convert\res"
-    output_file = "merged_presentation1-2.pdf"
+    # Enter the details here
+    input_folder = None
+    output_file = None
 
     # 支持不同布局模式：
     # - 1页/页：原样输出
@@ -173,6 +189,7 @@ if __name__ == "__main__":
     processor = PDFMergerProcessor(
         input_folder=input_folder,
         output_file=output_file,
-        pages_per_sheet=1  # 可修改此值测试不同布局
+        pages_per_sheet=4,  # 可修改此值测试不同布局
+        padding=0.05
     )
     processor.process_pdfs()
